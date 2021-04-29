@@ -61,12 +61,15 @@ contract Lease is AbstractLease {
   // Contract signing time, as seconds since unix epoch
   uint256 public signedAt;
 
+  // State variables to increase performance
+  uint256 private installment;
+  uint256 private insurance;
+  uint256 private rental;
+
   // State variables above this line will not be changed after the contract is signed by the Insurance Company and the Lessee
 
   // Funds currently available for withdrawal by the Lessor
   uint256 private available;
-  // Funds currently available for withdrawal by the Insurance Company
-  uint256 private availableInsurance;
   // Total amount paid by the Lessee
   uint256 private totalPaid;
   // Last cycle paid by the Lessee
@@ -124,12 +127,19 @@ contract Lease is AbstractLease {
     duration = _duration; // e.g. 10
     // Set the contract's signing time
     signedAt = block.timestamp;
+    installment = calculateInstallment(value, lifespan);
+    insurance = calculateInsurance(value, interestRate, duration);
+    rental = calculateRental(installment, insurance);
     // The lease's state is set to Valid
     state = LeaseState.VALID;
     // Emit a Valid event, which is stored in the blockchain
     emit Valid(msg.sender, duration);
   }
 
+  // Separating the `pay`, `amortize` and `liquidate` functions simplifies the logic that implements the business rules
+  // The `pay` and `amortize` functions must be reentrancy safe because they may not change the contract's state
+  // This means that they must guard against being recursively called from within another contract's code
+  // Because these functions do not call functions from other contracts nor transfer any funds, no extra measures need to be taken
   /**
    * @notice Called by the Lessee to pay the installments
    */
@@ -137,31 +147,25 @@ contract Lease is AbstractLease {
     uint256 currentCycle = getCurrentCycle(signedAt, periodicity, block.timestamp);
     require(currentCycle <= duration, "Contract is already terminated.");
     require(currentCycle > lastPaidCycle, "Cycle has already been paid.");
-    if (currentCycle > lastPaidCycle + 2) {
-      // The lease's state is set to Terminated
-      state = LeaseState.TERMINATED;
-      // We cannot revert the state of the contract, otherwise the state change would be lost
-      return;
-    }
-    uint256 installment = calculateInstallment(value, lifespan);
-    uint256 insurance = calculateInsurance(value, interestRate, duration);
-    uint256 rental = calculateRental(installment, insurance);
+    // Revert and refund if the contract was terminated for lack of payment
+    require(currentCycle <= lastPaidCycle + 2);
     bool purchase;
     if (currentCycle == lastPaidCycle + 1) {
       purchase = currentCycle == duration && (msg.value == rental + remainingResidual);
       require(msg.value == rental, "Must pay the full installment exactly.");
+      lastPaidCycle = currentCycle;
       // Store the transfered value as funds available for withdrawal
       available += installment;
-      availableInsurance += insurance;
-    }
-    if (currentCycle == lastPaidCycle + 2) {
+      // This direct transfer is reentrancy safe, because the state guards above prevent recursion
+      insuranceCompany.transfer(insurance);
+    } else { // currentCycle == lastPaidCycle + 2
       purchase = currentCycle == duration && (msg.value == 2 * rental + (rental * fineRate / 100) + remainingResidual);
       require(msg.value == 2 * rental + (rental * fineRate / 100), "Must pay the full installments exactly, plus the fine.");
+      lastPaidCycle = currentCycle;
       // Store the transfered value as funds available for withdrawal
       available += 2 * installment;
-      availableInsurance += 2 * insurance;
+      insuranceCompany.transfer(2 * insurance);
     }
-    lastPaidCycle = currentCycle;
     if (lastPaidCycle == duration) {
       // The lease's state is set to Terminated
       state = LeaseState.TERMINATED;
@@ -178,12 +182,8 @@ contract Lease is AbstractLease {
   function amortize() external payable override ensureCaller(lessee) ensureState(LeaseState.VALID, "Valid") {
     uint256 currentCycle = getCurrentCycle(signedAt, periodicity, block.timestamp);
     require(currentCycle <= duration, "Contract is already terminated.");
-    if (currentCycle > lastPaidCycle + 2) {
-      // The lease's state is set to Terminated
-      state = LeaseState.TERMINATED;
-      // We cannot revert the state of the contract, otherwise the state change would be lost
-      return;
-    }
+    // Revert and refund if the contract was terminated for lack of payment
+    require(currentCycle <= lastPaidCycle + 2);
     // Guarantee that transfered value is lower than the remaining residual value
     require(msg.value <= remainingResidual, "The amortized value must be lower than the remaining residual value.");
     // Subtract the transfered value from the remaining residual value
@@ -198,13 +198,8 @@ contract Lease is AbstractLease {
   function liquidate() external payable override ensureCaller(lessee) ensureState(LeaseState.VALID, "Valid") {
     uint256 currentCycle = getCurrentCycle(signedAt, periodicity, block.timestamp);
     require(currentCycle <= duration, "Contract is already terminated.");
-    if (currentCycle > lastPaidCycle + 2) {
-      // The lease's state is set to Terminated
-      state = LeaseState.TERMINATED;
-      // We cannot revert the state of the contract, otherwise the state change would be lost
-      return;
-    }
-    uint256 installment = calculateInstallment(value, lifespan);
+    // Revert and refund if the contract was terminated for lack of payment
+    require(currentCycle <= lastPaidCycle + 2);
     uint256 remainingCycles = duration - lastPaidCycle;
     bool purchase = msg.value == remainingCycles * installment + remainingResidual;
     require(msg.value == remainingCycles * installment || purchase);
@@ -220,6 +215,13 @@ contract Lease is AbstractLease {
     }
   }
 
+  // The `withdraw` function implements the withdawal pattern
+  // This pattern prevents contracts from becoming stuck in an irrecoverable state if an attacker
+  // interacts with the contract using another contract
+  // This is because contracts' default fallback functions are non-payable, which means that when we try to
+  // transfer funds to contracts without a payable fallback function, the transfer will be refused
+  // and the original function will be reverted
+  // Also, withdrawal transaction gas costs are paid by the Lessor
   /**
    * @notice Called by the Lessor to withdraw any available funds
    * @dev This function may be called at any time
@@ -233,21 +235,6 @@ contract Lease is AbstractLease {
     available = 0 wei;
     // Transfer the available funds to the Lessor, as requested
     lessor.transfer(amount);
-  }
-
-  /**
-   * @notice Called by the Insurance Company to withdraw any available funds
-   * @dev This function may be called at any time
-   */
-  function withdrawInsurance() external override ensureCaller(insuranceCompany) {
-    // Guarantee that there are funds available for withdrawal
-    require(availableInsurance != 0, "No amount available for withdrawal.");
-    // To make the funtion reentrance safe, the available amount is reset before the transfer
-    uint256 amount = availableInsurance;
-    // Reset the available amount
-    availableInsurance = 0 wei;
-    // Transfer the available funds to the Insurance Company, as requested
-    insuranceCompany.transfer(amount);
   }
 
   /**

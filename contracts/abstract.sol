@@ -90,8 +90,6 @@ abstract contract AbstractLease {
 
   function withdraw() external virtual;
 
-  function withdrawInsurance() external virtual;
-
   function terminate() external payable virtual;
 
   function destroy() external payable virtual;

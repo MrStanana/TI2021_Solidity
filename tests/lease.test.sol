@@ -1,18 +1,16 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-// import "truffle/Assert.sol";
+import "truffle/Assert.sol";
 
 import "../contracts/lease.sol";
 
 contract LeaseTest {
 
-  event TestEvent(bool indexed result, string message);
-
-  // Lease leaseInstance;
+  // Lease lease;
 
   // function beforeAll () public {
-  //   leaseInstance = new Lease("id", 100 wei, 10, 3 minutes, 5, 10 wei);
+  //   lease = new Lease("id", 100 wei, 10, 3 minutes, 5, 10 wei);
   // }
 
   // function checkWinningProposal () public {
@@ -27,9 +25,8 @@ contract LeaseTest {
 
   function checkNewContract() public {
     Lease lease = new Lease("id", 100 wei, 10, 3 minutes, 5, 10 wei);
-    assert(lease.identifier() == "id");
-    // Assert.equal(lease.identifier(), "id");
-    emit TestEvent(lease.identifier() == "id", "");
+    // assert(lease.identifier() == "id");
+    Assert.equal(lease.identifier(), "id", "Invalid identifier");
   }
 
 }

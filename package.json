@@ -1,7 +1,7 @@
 {
   "scripts": {
     "compile": "truffle compile",
-    "test": "truffle test --compile-all-debug --verbose-rpc --show-events"
+    "test": "truffle test --compile-all-debug --show-events --stacktrace ./tests/*"
   },
   "dependencies": {
     "soljs": "^6.0.0",
