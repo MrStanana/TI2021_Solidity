@@ -2,6 +2,7 @@
 pragma solidity ^0.8.0;
 
 import "truffle/Assert.sol";
+// import "truffle/DeployedAddresses.sol";
 
 import "../contracts/lease.sol";
 
@@ -23,9 +24,13 @@ contract LeaseTest {
   //   return ballotToTest.winningProposal() == 0;
   // }
 
-  function checkNewContract() public {
+  // function testDeployedContract() public {
+  //   Lease lease = Lease(DeployedAddresses.Lease());
+  //   Assert.equal(lease.identifier(), "id", "Invalid identifier");
+  // }
+
+  function testNewContract() public {
     Lease lease = new Lease("id", 100 wei, 10, 3 minutes, 5, 10 wei);
-    // assert(lease.identifier() == "id");
     Assert.equal(lease.identifier(), "id", "Invalid identifier");
   }
 

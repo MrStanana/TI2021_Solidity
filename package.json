@@ -1,11 +1,13 @@
 {
   "scripts": {
-    "compile": "truffle compile",
-    "test": "truffle test --compile-all-debug --show-events --stacktrace ./tests/*"
+    "compile": "solcjs --bin --base-path contracts --output-dir build contracts/*",
+    "compile:truffle": "truffle compile",
+    "test": "truffle test --compile-all-debug --show-events --stacktrace ./tests/*",
+    "gas": "solc contracts/* --gas"
   },
   "dependencies": {
-    "soljs": "^6.0.0",
-    "truffle": "^5.3.3",
+    "solc": "^0.8.4",
+    "truffle": "^5.3.4",
     "web3": "^1.3.5"
   }
 }
