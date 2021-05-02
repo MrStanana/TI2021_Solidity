@@ -105,3 +105,6 @@ dist
 
 # Solidity build directory
 build
+
+# Zip archives
+*.zip

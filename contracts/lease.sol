@@ -32,19 +32,10 @@ contract Lease {
   }
 
   // Events allow clients to subscribe and react to changes
-  // Created event, emitted when the contract is created by the Lessor
-  event Created(address indexed lessor, bytes32 indexed identifier, uint64 value, uint32 lifespan,
-      uint32 periodicity, uint8 fineRate, uint64 terminationFine);
-  // Signed event, emitted when the contract is signed by the Insurance Company
-  event Signed(address indexed insuranceCompany, uint32 interestRate);
-  // Valid event, emitted when the contract is signed by the Lessee
-  event Valid(address indexed lessee, uint32 duration);
-  // Terminated event, emitted when the contract is destroyed by the Lessee
-  event Terminated();
   // Purchased event, emitted when the asset is purchased by the Lessee
-  event Purchased(string message);
+  event Purchased(bytes32 indexed identifier, address lessee);
   // Destroyed event, emitted when the asset is destroyed by the Insurance Company
-  event Destroyed(string message);
+  event Destroyed(bytes32 indexed identifier, address insuranceCompany);
 
   // Custom errors were added in version 0.8.4
   // /**
@@ -58,7 +49,7 @@ contract Lease {
   // Ensure that the current lease state is equal to the state required by the function
   modifier ensureState(LeaseState _state) {
     // Guarantee that the state is equal to _state before proceeding
-    require(state == _state, "Lease must be in the correct state.");
+    require(state == _state, "Lease must be in the correct state");
     // require(state == _state, string(abi.encodePacked("Lease must be in the ", _message, " state.")));
     // A revert statement allows throwing a custom error
     // if (state != _state) revert InvalidStateError({
@@ -73,7 +64,7 @@ contract Lease {
   // Ensure that the caller is equal to the address required by the function
   modifier ensureCaller(address sender) {
     // Guarantee that the funcion caller is allowed to call the function before proceeding
-    require(msg.sender == sender, "User does not have permission to call this function.");
+    require(msg.sender == sender, "User does not have permission to call this function");
     // The following line executes the function
     _;
   }
@@ -93,24 +84,22 @@ contract Lease {
   // Unique identifier of the asset
   bytes32 public identifier;
   // Value of the asset
-  uint256 public value;
+  uint256 private value;
   // Lifespan of the asset, in cycles
-  uint32 public lifespan;
+  uint32 private lifespan;
   // Cycle periodicity for rental payments
-  uint256 public periodicity;
+  uint256 private periodicity;
   // Additional cycle cost if the Lessee fails to pay on a given cycle, expressed as a percentage of the asset's value
-  uint32 public fineRate;
+  uint32 private fineRate;
   // Amount the Lessee must pay if they terminate the lease before its duration
-  uint256 public terminationFine;
+  uint256 private terminationFine;
   // Amount the insurance company will receive if the lease runs for its whole duration, expressed as a percentage of the asset's value
-  uint32 public interestRate;
+  uint32 private interestRate;
   // Duration of the lease, in cycles
-  uint32 public duration;
+  uint32 private duration;
 
-  // Contract creation time, as seconds since unix epoch
-  uint256 public createdAt;
   // Contract signing time, as seconds since unix epoch
-  uint256 public signedAt;
+  uint256 private signedAt;
 
   // State variables to increase performance
   uint256 private installment;
@@ -138,17 +127,13 @@ contract Lease {
     periodicity = _periodicity; // e.g. 4 weeks, 3 minutes
     fineRate = _fineRate; // e.g. 0.1
     terminationFine = _terminationFine; // e.g. 10 wei, 0.1 ether
-    // Set the contract's creation time
-    createdAt = block.timestamp;
     available = 0;
     totalPaid = 0;
     lastPaidCycle = 0;
-    remainingResidual = calculateResidual(value, calculateInstallment(value, lifespan), duration);
+    installment = calculateInstallment(value, lifespan);
+    remainingResidual = calculateResidual(value, installment, duration);
     // The lease's state is set to Created
     state = LeaseState.CREATED;
-    // Emit a Created event, which is stored in the blockchain
-    // Immutable state variables cannot be read at creation time
-    emit Created(msg.sender, _identifier, _value, _lifespan, _periodicity, _fineRate, _terminationFine);
   }
 
   /**
@@ -161,8 +146,6 @@ contract Lease {
     interestRate = _interestRate; // e.g. 0.1
     // The lease's state is set to Signed
     state = LeaseState.SIGNED;
-    // Emit a Signed event, which is stored in the blockchain
-    emit Signed(msg.sender, interestRate);
   }
 
   /**
@@ -171,19 +154,16 @@ contract Lease {
    */
   function lesseeSign(uint32 _duration) external ensureState(LeaseState.SIGNED) {
     // Guarantee the duration does not exceed to asset's lifespan
-    require(_duration <= lifespan, "Lease duration must not exceed asset lifespan.");
+    require(_duration <= lifespan, "Lease duration must not exceed asset lifespan");
     // The caller of this function is considered the Lessee
     lessee = payable(msg.sender);
     duration = _duration; // e.g. 10
     // Set the contract's signing time
     signedAt = block.timestamp;
-    installment = calculateInstallment(value, lifespan);
     insurance = calculateInsurance(value, interestRate, duration);
     rental = calculateRental(installment, insurance);
     // The lease's state is set to Valid
     state = LeaseState.VALID;
-    // Emit a Valid event, which is stored in the blockchain
-    emit Valid(msg.sender, duration);
   }
 
   // Separating the `pay`, `amortize` and `liquidate` functions simplifies the logic that implements the business rules
@@ -195,24 +175,24 @@ contract Lease {
    */
   function pay() external payable ensureCaller(lessee) ensureState(LeaseState.VALID) {
     uint256 currentCycle = getCurrentCycle(signedAt, periodicity, block.timestamp);
-    require(currentCycle <= duration, "Contract is already terminated.");
-    require(currentCycle > lastPaidCycle, "Cycle has already been paid.");
+    require(currentCycle <= duration, "Contract is already terminated");
+    require(currentCycle > lastPaidCycle, "Cycle has already been paid");
     // Revert and refund if the contract was terminated for lack of payment
-    require(currentCycle <= lastPaidCycle + 2, "Contract has terminated due to lack of payment.");
+    require(currentCycle <= lastPaidCycle + 2, "Contract has terminated due to lack of payment");
     bool purchase;
     if (currentCycle == lastPaidCycle + 1) {
       purchase = currentCycle == duration && (msg.value == rental + remainingResidual);
-      require(msg.value == rental, "Must pay the full installment exactly.");
+      require(msg.value == rental, "Must pay the full installment exactly");
       lastPaidCycle = currentCycle;
-      // Store the transfered value as funds available for withdrawal
+      // Store the transferred value as funds available for withdrawal
       available += installment;
       // This direct transfer is reentrancy safe, because the state guards above prevent recursion
       insuranceCompany.transfer(insurance);
     } else { // currentCycle == lastPaidCycle + 2
       purchase = currentCycle == duration && (msg.value == 2 * rental + (rental * fineRate / 100) + remainingResidual);
-      require(msg.value == 2 * rental + (rental * fineRate / 100), "Must pay the full installments exactly, plus the fine.");
+      require(msg.value == 2 * rental + (rental * fineRate / 100), "Must pay the full installments exactly, plus the fine");
       lastPaidCycle = currentCycle;
-      // Store the transfered value as funds available for withdrawal
+      // Store the transferred value as funds available for withdrawal
       available += 2 * installment;
       insuranceCompany.transfer(2 * insurance);
     }
@@ -222,7 +202,7 @@ contract Lease {
       remainingResidual = 0;
       if (purchase) {
         // Emit a Purchased event
-        emit Purchased(string(abi.encodePacked("Lessee ", lessee, " is the new owner of the asset ", identifier)));
+        emit Purchased(identifier, lessee);
       }
     }
   }
@@ -232,14 +212,14 @@ contract Lease {
    */
   function amortize() external payable ensureCaller(lessee) ensureState(LeaseState.VALID) {
     uint256 currentCycle = getCurrentCycle(signedAt, periodicity, block.timestamp);
-    require(currentCycle <= duration, "Contract is already terminated.");
+    require(currentCycle <= duration, "Contract is already terminated");
     // Revert and refund if the contract was terminated for lack of payment
-    require(currentCycle <= lastPaidCycle + 2, "Contract has terminated due to lack of payment.");
-    // Guarantee that transfered value is lower than the remaining residual value
-    require(msg.value <= remainingResidual, "The amortized value must be lower than the remaining residual value.");
-    // Subtract the transfered value from the remaining residual value
+    require(currentCycle <= lastPaidCycle + 2, "Contract has terminated due to lack of payment");
+    // Guarantee that transferred value is lower than the remaining residual value
+    require(msg.value <= remainingResidual, "The amortized value must be lower than the remaining residual value");
+    // Subtract the transferred value from the remaining residual value
     remainingResidual -= msg.value;
-    // Store the transfered value as funds available for withdrawal
+    // Store the transferred value as funds available for withdrawal
     available += msg.value;
   }
 
@@ -248,25 +228,25 @@ contract Lease {
    */
   function liquidate() external payable ensureCaller(lessee) ensureState(LeaseState.VALID) {
     uint256 currentCycle = getCurrentCycle(signedAt, periodicity, block.timestamp);
-    require(currentCycle <= duration, "Contract is already terminated.");
+    require(currentCycle <= duration, "Contract is already terminated");
     // Revert and refund if the contract was terminated for lack of payment
-    require(currentCycle <= lastPaidCycle + 2, "Contract has terminated due to lack of payment.");
+    require(currentCycle <= lastPaidCycle + 2, "Contract has terminated due to lack of payment");
     uint256 remainingCycles = duration - lastPaidCycle;
     bool purchase = msg.value == remainingCycles * installment + remainingResidual;
-    require(msg.value == remainingCycles * installment || purchase);
+    require(purchase || msg.value == remainingCycles * installment);
     // The lease's state is set to Terminated
     state = LeaseState.TERMINATED;
-    // Store the transfered value as funds available for withdrawal
+    // Store the transferred value as funds available for withdrawal
     available += msg.value;
     lastPaidCycle = duration;
     if (purchase) {
       remainingResidual = 0;
       // Emit a Purchased event
-      emit Purchased(string(abi.encodePacked("Lessee ", lessee, " is the new owner of the asset ", identifier)));
+      emit Purchased(identifier, lessee);
     }
   }
 
-  // The `withdraw` function implements the withdawal pattern
+  // The `withdraw` function implements the withdrawal pattern
   // This pattern prevents contracts from becoming stuck in an irrecoverable state if an attacker
   // interacts with the contract using another contract
   // This is because contracts' default fallback functions are non-payable, which means that when we try to
@@ -279,7 +259,7 @@ contract Lease {
    */
   function withdraw() external ensureCaller(lessor) {
     // Guarantee that there are funds available for withdrawal
-    require(available != 0, "No amount available for withdrawal.");
+    require(available != 0, "No amount available for withdrawal");
     // To make the funtion reentrance safe, the available amount is reset before the transfer
     uint256 amount = available;
     // Reset the available amount
@@ -294,18 +274,18 @@ contract Lease {
   function terminate() external payable ensureCaller(lessee) ensureState(LeaseState.VALID) {
     uint256 currentCycle = getCurrentCycle(signedAt, periodicity, block.timestamp);
     // Revert and refund if the contract was terminated for lack of payment
-    require(currentCycle <= lastPaidCycle + 2, "Contract has terminated due to lack of payment.");
+    require(currentCycle <= lastPaidCycle + 2, "Contract has terminated due to lack of payment");
     if (currentCycle <= 1) {
       // If terminating within the first cycle, the Lessee pays no fine
-      require(msg.value == 0, "No fine on the first cycle.");
+      require(msg.value == 0, "No fine on the first cycle");
     } else {
       // If terminating after the first cycle, the Lessee must pay the initially agreed termination fine
-      require(msg.value == terminationFine, "Termination after the first cycle incurs in a termination fine.");
+      require(msg.value == terminationFine, "Termination after the first cycle incurs in a termination fine");
+      // Store the transferred value as funds available for withdrawal
+      available += msg.value;
     }
     // The lease's state is set to Terminated
     state = LeaseState.TERMINATED;
-    // Emit a Terminated event
-    emit Terminated();
   }
 
   /**
@@ -314,15 +294,15 @@ contract Lease {
   function destroy() external payable ensureCaller(insuranceCompany) ensureState(LeaseState.VALID) {
     uint256 currentCycle = getCurrentCycle(signedAt, periodicity, block.timestamp);
     // Revert and refund if the contract was terminated for lack of payment
-    require(currentCycle <= lastPaidCycle + 2, "Contract has terminated due to lack of payment.");
+    require(currentCycle <= lastPaidCycle + 2, "Contract has terminated due to lack of payment");
     // Guarantee that the Insurance Company pays the value of the asset before destroying it
-    require(msg.value == value, "Must pay the value of the asset.");
+    require(msg.value == value, "Must pay the value of the asset");
     // The lease's state is set to Terminated
     state = LeaseState.TERMINATED;
-    // Store the transfered value as funds available for withdrawal
+    // Store the transferred value as funds available for withdrawal
     available += msg.value;
     // Emit a Destroyed event
-    emit Destroyed(string(abi.encodePacked("Asset ", identifier, " has been destroyed by the Insurance Company ", insuranceCompany)));
+    emit Destroyed(identifier, insuranceCompany);
   }
 
   /**

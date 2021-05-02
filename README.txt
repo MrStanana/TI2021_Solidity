@@ -8,27 +8,13 @@
 
 This project aims to provide a complete implementation of a Lease smart contract.
 
-The contract can be found in file `contracts/lease.sol`
+The contract can be found in file `lease.sol`
 
 All smart contract code is written in Solidity and is intended to be deployed in the Ethereum blockchain.
 
-Solidity documentation can be found here: https://docs.soliditylang.org/en/v0.8.4/index.html
-
-## Installation
-
-To install the solidity compiler, run `sudo apt install solc`
-
-To use the Node.js environment to test the contracts, install dependencies by running `npm install`
-
-To check for gas values, run `solc contract.sol --gas` or `npm run gas`
-
 ## Testing
 
-The following command compiles the contracts and runs all tests, using the `truffle` framework: `npm test`
-
-The contract may also be manually deployed in a private network using `truffle` or `web3`.
-
-## Usage
+The contract may be manually deployed in a private network using `truffle` or `web3`.
 
 After being deployed by the Lessor, the contract should be signed by the Insurance Company and the Lessee, using the functions `insuranceSign` and `lesseeSign`, respectively.
 
